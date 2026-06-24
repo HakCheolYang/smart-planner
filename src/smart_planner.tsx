@@ -139,6 +139,7 @@ function calcStreak(task) {
 function buildBlocks(tasks, settings, date) {
   const p = settings.pomo || DPOMO;
   const slots = safeArr(settings.slots || DSLOTS).slice().sort((a, b) => toM(a.start) - toM(b.start));
+  const nowAnchor = isToday(date) ? (getNow().getHours() * 60 + getNow().getMinutes()) : null;
   const active = tasks.filter(t => taskActive(t, date));
   const ord = { urgent: 0, event: 1, fixed: 2, flex: 3 };
   const sorted = active.slice().sort((a, b) => {
@@ -167,6 +168,10 @@ function buildBlocks(tasks, settings, date) {
       const task = snap[qi];
       const allowed = safeArr(task.allowedSlots);
       if (allowed.length > 0 && allowed.indexOf(slot.lb) < 0) { qi++; continue; }
+      if (task.type === "urgent" && nowAnchor !== null) {
+        if (nowAnchor >= end) { qi++; continue; }
+        if (cur < nowAnchor) cur = nowAnchor;
+      }
       const dur = task.type === "flex" ? (task.flexMin || task.duration) : task.duration;
       let rem = dur;
       while (rem > 0 && cur < end) {
@@ -911,7 +916,7 @@ export default function App() {
   return (
     <div style={{ fontFamily: "'Segoe UI',sans-serif", background: "#f8fafc", minHeight: "100vh", maxWidth: 900, margin: "0 auto" }}>
       <div style={{ background: "linear-gradient(135deg,#6366f1,#8b5cf6)", color: "#fff", padding: "14px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div><div style={{ fontSize: 19, fontWeight: 700 }}>🗓️ 스마트 플래너 <span style={{ fontSize: 11, fontWeight: 400, opacity: 0.7, background: "rgba(255,255,255,.2)", borderRadius: 6, padding: "2px 7px" }}>v1.2.0</span></div><div style={{ fontSize: 12, opacity: .8 }}>사명 기반 스마트 스케줄러</div></div>
+        <div><div style={{ fontSize: 19, fontWeight: 700 }}>🗓️ 스마트 플래너 <span style={{ fontSize: 11, fontWeight: 400, opacity: 0.7, background: "rgba(255,255,255,.2)", borderRadius: 6, padding: "2px 7px" }}>v1.2.1</span></div><div style={{ fontSize: 12, opacity: .8 }}>사명 기반 스마트 스케줄러</div></div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <button onClick={() => { if (window.confirm("예제 데이터로 초기화할까요?")) { setTasks(STASKS); setSettings(SSETS); } }} style={{ background: "rgba(255,255,255,.18)", border: "1px solid rgba(255,255,255,.35)", borderRadius: 8, padding: "5px 10px", color: "#fff", cursor: "pointer", fontSize: 11 }}>🔄 예제 초기화</button>
           <PomoWidget pomo={pomo} setPomo={setPomo} cfg={settings.pomo || DPOMO} />
