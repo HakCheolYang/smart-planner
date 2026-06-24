@@ -244,7 +244,7 @@ function PomoWidget({ pomo, setPomo, cfg }) {
 }
 
 /* ── 일간 타임라인 ────────────────────────────────── */
-function DayTimeline({ date, tasks, settings, onComplete, onCancel }) {
+function DayTimeline({ date, tasks, settings, onComplete, onCancel, onReschedule }) {
   const [blocks, setBlocks] = useState([]);
   const [drag, setDrag] = useState(null);
   const [resz, setResz] = useState(null);
@@ -274,7 +274,11 @@ function DayTimeline({ date, tasks, settings, onComplete, onCancel }) {
     if (drag && gridRef.current) { const rect = gridRef.current.getBoundingClientRect(); const ns = Math.round((ev.clientY - rect.top - drag.oy) / PX / 5) * 5 + allS; setBlocks(p => p.map(b => b.id === drag.id ? merge(b, { start: Math.max(allS, Math.min(allE - 5, ns)) }) : b)); }
     if (resz && gridRef.current) { const dm = Math.round((ev.clientY - resz.sy) / PX / 5) * 5; setBlocks(p => p.map(b => b.id === resz.id ? merge(b, { dur: Math.max(5, (b._od || b.dur) + dm) }) : b)); }
   };
-  const onUp = () => { setDrag(null); setResz(null); setBlocks(p => p.map(b => { const nb = merge(b, {}); delete nb._od; return nb; })); };
+  const onUp = () => {
+    if (drag) { const b = blocks.find(x => x.id === drag.id); if (b && b.taskId) onReschedule(b.taskId, b.start, null); }
+    else if (resz) { const b = blocks.find(x => x.id === resz.id); if (b && b.taskId) onReschedule(b.taskId, b.start, b.dur); }
+    setDrag(null); setResz(null); setBlocks(p => p.map(b => { const nb = merge(b, {}); delete nb._od; return nb; }));
+  };
   return (
     <div style={{ background: "#fff", borderRadius: 12, boxShadow: "0 1px 4px rgba(0,0,0,.07)", overflow: "hidden", userSelect: "none" }} onMouseMove={onMM} onMouseUp={onUp} onMouseLeave={onUp}>
       <div style={{ display: "flex", gap: 7, padding: "7px 12px", borderBottom: "1px solid #f1f5f9", flexWrap: "wrap", alignItems: "center" }}>
@@ -380,7 +384,7 @@ function WeekGrid({ wdays, tasks, settings }) {
 }
 
 /* ── 스케줄 탭 ────────────────────────────────────── */
-function ScheduleTab({ tasks, settings, onComplete, onCancel, onToggle, logs, onAddLog, onDeleteLog }) {
+function ScheduleTab({ tasks, settings, onComplete, onCancel, onToggle, onReschedule, logs, onAddLog, onDeleteLog }) {
   const [view, setView] = useState("day");
   const [cur, setCur] = useState(() => getNow());
   const wds = weekDays(cur);
@@ -430,7 +434,7 @@ function ScheduleTab({ tasks, settings, onComplete, onCancel, onToggle, logs, on
             </div>
             <button onClick={() => setCur(d => addD(d, 1))} style={NB}>다음날 ›</button>
           </div>
-          <DayTimeline date={cur} tasks={tasks} settings={settings} onComplete={onComplete} onCancel={onCancel} />
+          <DayTimeline date={cur} tasks={tasks} settings={settings} onComplete={onComplete} onCancel={onCancel} onReschedule={onReschedule} />
           <ActivityLog date={cur} logs={logs} onAdd={onAddLog} onDelete={onDeleteLog} />
         </div>
       ) : (
@@ -903,6 +907,10 @@ export default function App() {
   };
   const addLog = (date, text, time) => setLogs(ls => ls.concat([{ id: uid(), date, time: time || fmt(getNow().getHours() * 60 + getNow().getMinutes()), text, createdAt: Date.now() }]));
   const delLog = id => setLogs(ls => ls.filter(l => l.id !== id));
+  const doReschedule = (taskId, startM, dur) => {
+    setTasks(tasks.map(t => t.id === taskId ? merge(t, dur != null ? { fixedTime: fmt(startM), duration: dur } : { fixedTime: fmt(startM) }) : t));
+    notify("⏰ " + fmt(startM) + "로 시간 조정됨", "info");
+  };
   const doUrgent = ut => {
     let needed = ut.duration;
     const next = tasks.map(t => { if (t.type === "flex" && !t.cancelled && !t.done && needed > 0) { const mn = t.flexMin || Math.floor(t.duration * 0.3), saved = t.duration - mn; if (saved > 0) { needed -= saved; return merge(t, { duration: mn, compressed: true }); } } return t; });
@@ -916,7 +924,7 @@ export default function App() {
   return (
     <div style={{ fontFamily: "'Segoe UI',sans-serif", background: "#f8fafc", minHeight: "100vh", maxWidth: 900, margin: "0 auto" }}>
       <div style={{ background: "linear-gradient(135deg,#6366f1,#8b5cf6)", color: "#fff", padding: "14px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div><div style={{ fontSize: 19, fontWeight: 700 }}>🗓️ 스마트 플래너 <span style={{ fontSize: 11, fontWeight: 400, opacity: 0.7, background: "rgba(255,255,255,.2)", borderRadius: 6, padding: "2px 7px" }}>v1.2.1</span></div><div style={{ fontSize: 12, opacity: .8 }}>사명 기반 스마트 스케줄러</div></div>
+        <div><div style={{ fontSize: 19, fontWeight: 700 }}>🗓️ 스마트 플래너 <span style={{ fontSize: 11, fontWeight: 400, opacity: 0.7, background: "rgba(255,255,255,.2)", borderRadius: 6, padding: "2px 7px" }}>v1.2.2</span></div><div style={{ fontSize: 12, opacity: .8 }}>사명 기반 스마트 스케줄러</div></div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <button onClick={() => { if (window.confirm("예제 데이터로 초기화할까요?")) { setTasks(STASKS); setSettings(SSETS); } }} style={{ background: "rgba(255,255,255,.18)", border: "1px solid rgba(255,255,255,.35)", borderRadius: 8, padding: "5px 10px", color: "#fff", cursor: "pointer", fontSize: 11 }}>🔄 예제 초기화</button>
           <PomoWidget pomo={pomo} setPomo={setPomo} cfg={settings.pomo || DPOMO} />
@@ -927,7 +935,7 @@ export default function App() {
         {TABS.map((t, i) => <button key={i} onClick={() => setTab(i)} style={{ flex: 1, padding: "11px 4px", border: "none", background: "none", fontWeight: tab === i ? 700 : 400, color: tab === i ? "#6366f1" : "#64748b", borderBottom: tab === i ? "3px solid #6366f1" : "3px solid transparent", cursor: "pointer", fontSize: 13 }}>{t}</button>)}
       </div>
       <div style={{ padding: 14 }}>
-        {tab === 0 && <ScheduleTab tasks={tasks} settings={settings} onComplete={doComplete} onCancel={doCancel} onToggle={doToggle} logs={logs} onAddLog={addLog} onDeleteLog={delLog} />}
+        {tab === 0 && <ScheduleTab tasks={tasks} settings={settings} onComplete={doComplete} onCancel={doCancel} onToggle={doToggle} onReschedule={doReschedule} logs={logs} onAddLog={addLog} onDeleteLog={delLog} />}
         {tab === 1 && <TaskTab tasks={tasks} settings={settings} onAdd={() => { setEditTask(null); setShowForm(true); }} onEdit={t => { setEditTask(t); setShowForm(true); }} onComplete={doComplete} onCancel={doCancel} onUrgent={doUrgent} onToggle={doToggle} />}
         {tab === 2 && <AnalysisTab tasks={tasks} settings={settings} />}
         {tab === 3 && <SettingsTab settings={settings} onChange={setSettings} />}
