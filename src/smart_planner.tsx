@@ -68,11 +68,13 @@ const SSETS = {
   pomo: DPOMO, cats: DCATS, slots: DSLOTS,
 };
 
-const SK_T = "lp_t7", SK_S = "lp_s7";
+const SK_T = "lp_t7", SK_S = "lp_s7", SK_L = "lp_log7";
 const loadT = () => { try { const r = localStorage.getItem(SK_T); if (r) return JSON.parse(r); } catch(e) {} return STASKS; };
 const loadS = () => { try { const r = localStorage.getItem(SK_S); if (r) return JSON.parse(r); } catch(e) {} return SSETS; };
+const loadL = () => { try { const r = localStorage.getItem(SK_L); if (r) return JSON.parse(r); } catch(e) {} return []; };
 const saveT = t => { try { localStorage.setItem(SK_T, JSON.stringify(t)); } catch(e) {} };
 const saveS = s => { try { localStorage.setItem(SK_S, JSON.stringify(s)); } catch(e) {} };
+const saveL = l => { try { localStorage.setItem(SK_L, JSON.stringify(l)); } catch(e) {} };
 
 /* ── 로직 ─────────────────────────────────────────── */
 function checkActive(task, date) {
@@ -108,6 +110,30 @@ function taskActive(task, date) {
   if (r === "주말") return dn === 0 || dn === 6;
   if (r === "매월") { if (!task.createdAt) return false; return new Date(task.createdAt).getDate() === date.getDate(); }
   return false;
+}
+
+function repeatActiveOn(task, date) {
+  const r = task.repeat || "없음", dow = WMAP[date.getDay()], dn = date.getDay();
+  if (r === "매일") return true;
+  if (r === "매주") return safeArr(task.repeatDays).indexOf(dow) >= 0;
+  if (r === "평일") return dn >= 1 && dn <= 5;
+  if (r === "주말") return dn === 0 || dn === 6;
+  if (r === "매월") return task.createdAt ? new Date(task.createdAt).getDate() === date.getDate() : false;
+  return false;
+}
+
+function calcStreak(task) {
+  const dates = safeArr(task.doneDates);
+  let cur = getNow();
+  if (repeatActiveOn(task, cur) && dates.indexOf(dstr(cur)) < 0) cur = addD(cur, -1);
+  let streak = 0;
+  for (let i = 0; i < 366; i++) {
+    if (repeatActiveOn(task, cur)) {
+      if (dates.indexOf(dstr(cur)) >= 0) { streak++; cur = addD(cur, -1); }
+      else break;
+    } else cur = addD(cur, -1);
+  }
+  return streak;
 }
 
 function buildBlocks(tasks, settings, date) {
@@ -218,13 +244,16 @@ function DayTimeline({ date, tasks, settings, onComplete, onCancel }) {
   const [drag, setDrag] = useState(null);
   const [resz, setResz] = useState(null);
   const [tip, setTip] = useState(null);
+  const [now, setNow] = useState(getNow());
   const gridRef = useRef(null);
   const slots = settings.slots || DSLOTS;
   let allS = 99999, allE = 0;
   for (let i = 0; i < slots.length; i++) { const sm = toM(slots[i].start), em = toM(slots[i].end); if (sm < allS) allS = sm; if (em > allE) allE = em; }
   const PX = 2.2, totalH = (allE - allS) * PX, TW = 44;
   const isTod = isToday(date), isp = isPast(date);
+  const nowM = now.getHours() * 60 + now.getMinutes();
   useEffect(() => setBlocks(buildBlocks(tasks, settings, date)), [tasks, settings, date]);
+  useEffect(() => { const id = setInterval(() => setNow(getNow()), 30000); return () => clearInterval(id); }, []);
   const tl = []; for (let m = allS; m <= allE; m += 30) tl.push(m);
   const getTask = id => tasks.find(t => t.id === id) || null;
   const getGoal = id => (settings.goals || []).find(g => g.id === id) || null;
@@ -250,11 +279,12 @@ function DayTimeline({ date, tasks, settings, onComplete, onCancel }) {
       <div style={{ display: "flex", overflowY: "auto", maxHeight: 560 }} ref={gridRef}>
         <div style={{ width: TW, flexShrink: 0, position: "relative", height: totalH, borderRight: "1px solid #f1f5f9" }}>
           {tl.map(m => <div key={m} style={{ position: "absolute", top: (m - allS) * PX - 7, right: 5, fontSize: 9, color: m % 60 === 0 ? "#64748b" : "#d1d5db", fontWeight: m % 60 === 0 ? 600 : 400, whiteSpace: "nowrap" }}>{m % 60 === 0 ? fmt(m) : "·" + pad(m % 60)}</div>)}
+          {isTod && nowM >= allS && nowM <= allE && <div style={{ position: "absolute", top: (nowM - allS) * PX - 5, right: -1, width: 0, height: 0, borderTop: "5px solid transparent", borderBottom: "5px solid transparent", borderLeft: "7px solid #ef4444", zIndex: 11 }} />}
         </div>
         <div style={{ flex: 1, position: "relative", height: totalH }}>
           {tl.map(m => <div key={m} style={{ position: "absolute", top: (m - allS) * PX, left: 0, right: 0, borderTop: m % 60 === 0 ? "1px solid #e2e8f0" : "1px dashed #f1f5f9", pointerEvents: "none" }} />)}
           {slots.map(slot => { const top = (toM(slot.start) - allS) * PX, h = (toM(slot.end) - toM(slot.start)) * PX; return <div key={slot.id} style={{ position: "absolute", top, left: 0, right: 0, height: h, background: "rgba(99,102,241,.025)", borderTop: "1.5px solid #e0e7ff", pointerEvents: "none" }}><span style={{ position: "absolute", top: 3, left: 6, fontSize: 9, color: "#c7d2fe", fontWeight: 700 }}>{slot.lb} {slot.start}–{slot.end}</span></div>; })}
-          {isTod && (() => { const n = getNow(), nm = n.getHours() * 60 + n.getMinutes(); if (nm < allS || nm > allE) return null; return <div style={{ position: "absolute", top: (nm - allS) * PX, left: 0, right: 0, zIndex: 10, pointerEvents: "none" }}><div style={{ borderTop: "2px solid #ef4444", position: "relative" }}><div style={{ position: "absolute", left: -4, top: -4, width: 8, height: 8, borderRadius: "50%", background: "#ef4444" }} /><span style={{ position: "absolute", left: 8, top: -9, fontSize: 9, color: "#ef4444", fontWeight: 700, background: "#fff", padding: "0 2px" }}>지금 {fmt(nm)}</span></div></div>; })()}
+          {isTod && nowM >= allS && nowM <= allE && <div style={{ position: "absolute", top: (nowM - allS) * PX, left: 0, right: 0, zIndex: 10, pointerEvents: "none" }}><div style={{ borderTop: "2px solid #ef4444", position: "relative" }}><span style={{ position: "absolute", left: 8, top: -9, fontSize: 9, color: "#ef4444", fontWeight: 700, background: "#fff", padding: "0 2px" }}>지금 {fmt(nowM)}</span></div></div>}
           {blocks.map(b => {
             const top = (b.start - allS) * PX, bh = Math.max(b.dur * PX, 18), c = bc(b);
             const task = b.taskId ? getTask(b.taskId) : null;
@@ -345,7 +375,7 @@ function WeekGrid({ wdays, tasks, settings }) {
 }
 
 /* ── 스케줄 탭 ────────────────────────────────────── */
-function ScheduleTab({ tasks, settings, onComplete, onCancel, onToggle }) {
+function ScheduleTab({ tasks, settings, onComplete, onCancel, onToggle, logs, onAddLog, onDeleteLog }) {
   const [view, setView] = useState("day");
   const [cur, setCur] = useState(() => getNow());
   const wds = weekDays(cur);
@@ -356,21 +386,22 @@ function ScheduleTab({ tasks, settings, onComplete, onCancel, onToggle }) {
     if (!t.repeat || t.repeat === "없음") return !t.done || (t.dueDate && dleft(t.dueDate) <= 0);
     return true;
   });
-  const doneCount = todayChecks.filter(t => (t.repeat && t.repeat !== "없음") ? t.lastDoneDate === dk : t.done).length;
+  const doneCount = todayChecks.filter(t => (t.repeat && t.repeat !== "없음") ? safeArr(t.doneDates).indexOf(dk) >= 0 : t.done).length;
   return (
     <div>
       {todayChecks.length > 0 && (
         <div style={{ background: "#fff", borderRadius: 12, padding: "12px 16px", marginBottom: 12, boxShadow: "0 1px 4px rgba(0,0,0,.07)" }}>
           <div style={{ fontWeight: 700, fontSize: 13, color: "#6b7280", marginBottom: 8 }}>✅ 오늘 체크 항목 ({todayChecks.length - doneCount}개 남음)</div>
           {todayChecks.slice(0, 6).map(t => {
-            const isDone = (t.repeat && t.repeat !== "없음") ? t.lastDoneDate === dk : t.done;
+            const isDone = (t.repeat && t.repeat !== "없음") ? safeArr(t.doneDates).indexOf(dk) >= 0 : t.done;
+            const streak = t.repeat && t.repeat !== "없음" ? calcStreak(t) : 0;
             return (
               <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, padding: "4px 0" }}>
                 <input type="checkbox" checked={!!isDone} onChange={() => onToggle(t.id)} style={{ width: 15, height: 15, cursor: "pointer", accentColor: "#6366f1" }} />
                 <span style={{ flex: 1, textDecoration: isDone ? "line-through" : "none", color: isDone ? "#94a3b8" : "#1e293b" }}>{t.title}</span>
                 {t.repeat && t.repeat !== "없음" && <span style={{ fontSize: 10, color: "#8b5cf6", background: "#ede9fe", borderRadius: 4, padding: "1px 5px" }}>🔄{t.repeat}{t.repeat === "매주" && safeArr(t.repeatDays).length ? " " + t.repeatDays.join("·") : ""}</span>}
                 {t.dueDate && (!t.repeat || t.repeat === "없음") && <span style={{ fontSize: 11, color: dleft(t.dueDate) <= 0 ? "#ef4444" : "#94a3b8" }}>~{t.dueDate}</span>}
-                {(t.completedCount || 0) > 0 && <span style={{ fontSize: 10, color: "#10b981" }}>{t.completedCount}회</span>}
+                {streak > 0 && <span style={{ fontSize: 10, color: "#f59e0b" }}>🔥{streak}일</span>}
               </div>
             );
           })}
@@ -395,6 +426,7 @@ function ScheduleTab({ tasks, settings, onComplete, onCancel, onToggle }) {
             <button onClick={() => setCur(d => addD(d, 1))} style={NB}>다음날 ›</button>
           </div>
           <DayTimeline date={cur} tasks={tasks} settings={settings} onComplete={onComplete} onCancel={onCancel} />
+          <ActivityLog date={cur} logs={logs} onAdd={onAddLog} onDelete={onDeleteLog} />
         </div>
       ) : (
         <div>
@@ -410,12 +442,41 @@ function ScheduleTab({ tasks, settings, onComplete, onCancel, onToggle }) {
   );
 }
 
+/* ── 활동 로그 ────────────────────────────────────── */
+function ActivityLog({ date, logs, onAdd, onDelete }) {
+  const dk = dstr(date);
+  const [text, setText] = useState("");
+  const [time, setTime] = useState(() => fmt(getNow().getHours() * 60 + getNow().getMinutes()));
+  const items = safeArr(logs).filter(l => l.date === dk).sort((a, b) => toM(a.time) - toM(b.time));
+  const submit = () => { if (!text.trim()) return; onAdd(dk, text.trim(), time); setText(""); };
+  return (
+    <div style={{ background: "#fff", borderRadius: 12, padding: 14, marginTop: 12, boxShadow: "0 1px 4px rgba(0,0,0,.07)" }}>
+      <div style={{ fontWeight: 700, fontSize: 13, color: "#1e293b", marginBottom: 10 }}>📝 실제 활동 로그</div>
+      <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+        <input type="time" value={time} onChange={e => setTime(e.target.value)} style={mx(IS, { width: 92, flexShrink: 0 })} />
+        <input value={text} onChange={e => setText(e.target.value)} onKeyDown={e => e.key === "Enter" && submit()} placeholder="실제로 한 일을 기록해보세요" style={IS} />
+        <button onClick={submit} style={{ background: "#6366f1", color: "#fff", border: "none", borderRadius: 8, padding: "0 14px", cursor: "pointer", fontSize: 13, fontWeight: 600, flexShrink: 0 }}>추가</button>
+      </div>
+      {items.length === 0 && <Empty text="아직 기록된 활동이 없습니다" />}
+      {items.map(l => (
+        <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 0", borderBottom: "1px solid #f1f5f9" }}>
+          <span style={{ fontSize: 11, color: "#94a3b8", width: 38, flexShrink: 0 }}>{l.time}</span>
+          <span style={{ flex: 1, fontSize: 13, color: "#1e293b" }}>{l.text}</span>
+          <button onClick={() => onDelete(l.id)} style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontSize: 13 }}>✕</button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /* ── 태스크 카드 ──────────────────────────────────── */
 function TaskCard({ task, settings, onEdit, onComplete, onCancel }) {
   const tt = TY[task.type];
   const goal = (settings.goals || []).find(g => g.id === task.goalId) || null;
   const dl = task.dueDate ? dleft(task.dueDate) : null;
   const badge = dl !== null ? (dl < 0 ? "기한초과" : dl === 0 ? "오늘마감" : dl <= 3 ? "D-" + dl : null) : null;
+  const streak = task.repeat && task.repeat !== "없음" ? calcStreak(task) : 0;
+  const doneN = safeArr(task.doneDates).length;
   return (
     <div style={{ background: tt.bg, border: "1.5px solid " + tt.color, borderRadius: 10, padding: "10px 14px", opacity: task.done || task.cancelled ? 0.6 : 1 }}>
       <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
@@ -437,7 +498,7 @@ function TaskCard({ task, settings, onEdit, onComplete, onCancel }) {
             {task.dueDate ? " · 마감 " + task.dueDate : ""}
           </div>
           {goal && <div style={{ fontSize: 11, color: "#6366f1" }}>🎯 {goal.title}</div>}
-          {(task.completedCount || 0) > 0 && <div style={{ fontSize: 11, color: "#8b5cf6" }}>누적 완료 {task.completedCount}회</div>}
+          {doneN > 0 && <div style={{ fontSize: 11, color: "#8b5cf6" }}>누적 완료 {doneN}회{streak > 0 ? " · 🔥" + streak + "일 연속" : ""}</div>}
         </div>
         {!task.done && !task.cancelled && (
           <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
@@ -484,7 +545,8 @@ function TaskTab({ tasks, settings, onAdd, onEdit, onComplete, onCancel, onUrgen
         <div style={{ background: "#f9fafb", border: "1.5px solid #e5e7eb", borderRadius: 12, padding: "12px 16px", marginBottom: 12 }}>
           <div style={{ fontWeight: 700, fontSize: 13, color: "#6b7280", marginBottom: 8 }}>✅ 체크 리스트</div>
           {checkItems.map(t => {
-            const isDone = (t.repeat && t.repeat !== "없음") ? t.lastDoneDate === dk : t.done;
+            const isDone = (t.repeat && t.repeat !== "없음") ? safeArr(t.doneDates).indexOf(dk) >= 0 : t.done;
+            const streak = t.repeat && t.repeat !== "없음" ? calcStreak(t) : 0;
             return (
               <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: "1px solid #f3f4f6" }}>
                 <input type="checkbox" checked={!!isDone} onChange={() => onToggle(t.id)} style={{ width: 15, height: 15, cursor: "pointer", accentColor: "#6366f1" }} />
@@ -494,7 +556,8 @@ function TaskTab({ tasks, settings, onAdd, onEdit, onComplete, onCancel, onUrgen
                     {t.category1}{t.category2 ? " > " + t.category2 : ""}
                     {t.repeat && t.repeat !== "없음" ? " · 🔄" + t.repeat + (t.repeat === "매주" && safeArr(t.repeatDays).length ? " (" + t.repeatDays.join("·") + ")" : "") : ""}
                     {t.dueDate && (!t.repeat || t.repeat === "없음") ? " · ~" + t.dueDate : ""}
-                    {(t.completedCount || 0) > 0 ? " · " + t.completedCount + "회 완료" : ""}
+                    {safeArr(t.doneDates).length > 0 ? " · " + safeArr(t.doneDates).length + "회 완료" : ""}
+                    {streak > 0 ? " · 🔥" + streak + "일 연속" : ""}
                   </div>
                 </div>
                 <button onClick={() => onEdit(t)} style={BS("#6366f1")}>✏️</button>
@@ -528,6 +591,20 @@ function TaskTab({ tasks, settings, onAdd, onEdit, onComplete, onCancel, onUrgen
 }
 
 /* ── 분석 탭 ──────────────────────────────────────── */
+function HabitStrip({ task }) {
+  const days = []; for (let i = 13; i >= 0; i--) days.push(addD(getNow(), -i));
+  const todayStart = new Date(new Date().setHours(0, 0, 0, 0));
+  return (
+    <div style={{ display: "flex", gap: 3 }}>
+      {days.map(d => {
+        const dk = dstr(d), sched = repeatActiveOn(task, d), done = safeArr(task.doneDates).indexOf(dk) >= 0;
+        const bg = !sched ? "#f1f5f9" : done ? "#10b981" : d < todayStart ? "#fecaca" : "#fde68a";
+        return <div key={dk} title={dk + (sched ? (done ? " 완료" : " 미완료") : " 해당없음")} style={{ width: 12, height: 12, borderRadius: 3, background: bg, flexShrink: 0 }} />;
+      })}
+    </div>
+  );
+}
+
 function AnalysisTab({ tasks, settings }) {
   const done = tasks.filter(t => t.done);
   const total = done.reduce((s, t) => s + (t.duration || 0), 0);
@@ -538,7 +615,7 @@ function AnalysisTab({ tasks, settings }) {
   const wishDone = done.filter(t => t.type === "wish").length, wishTotal = tasks.filter(t => t.type === "wish").length;
   const balance = wishTotal > 0 ? Math.round(wishDone / wishTotal * 100) : 0;
   const checkDone = tasks.filter(t => t.type === "check" && t.done).length, checkTotal = tasks.filter(t => t.type === "check").length;
-  const rpt = tasks.filter(t => t.repeat && t.repeat !== "없음" && (t.completedCount || 0) > 0);
+  const habitTasks = tasks.filter(t => t.repeat && t.repeat !== "없음" && !t.cancelled);
   return (
     <div>
       <h3 style={{ margin: "0 0 14px", fontSize: 15, color: "#1e293b" }}>📊 생산성 분석</h3>
@@ -563,9 +640,17 @@ function AnalysisTab({ tasks, settings }) {
           </div>
         ); })}
       </div>
-      {rpt.length > 0 && <div style={{ background: "#fff", borderRadius: 12, padding: 16, marginBottom: 12, boxShadow: "0 1px 4px rgba(0,0,0,.07)" }}>
-        <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 10 }}>🔄 반복 달성</div>
-        {rpt.map(t => <div key={t.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 6, padding: "6px 0", borderBottom: "1px solid #f1f5f9" }}><span>{t.title}</span><span style={{ color: "#8b5cf6", fontWeight: 600 }}>{t.completedCount}회</span></div>)}
+      {habitTasks.length > 0 && <div style={{ background: "#fff", borderRadius: 12, padding: 16, marginBottom: 12, boxShadow: "0 1px 4px rgba(0,0,0,.07)" }}>
+        <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 10 }}>🔥 습관 트래커 (최근 14일)</div>
+        {habitTasks.map(t => (
+          <div key={t.id} style={{ marginBottom: 12 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13, marginBottom: 5 }}>
+              <span>{t.title}</span>
+              <span style={{ color: "#f59e0b", fontWeight: 700, fontSize: 12 }}>{calcStreak(t) > 0 ? "🔥" + calcStreak(t) + "일 연속" : "-"}</span>
+            </div>
+            <HabitStrip task={t} />
+          </div>
+        ))}
       </div>}
       {(settings.goals || []).length > 0 && <div style={{ background: "#fff", borderRadius: 12, padding: 16, marginBottom: 12, boxShadow: "0 1px 4px rgba(0,0,0,.07)" }}>
         <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 10 }}>🎯 목표별 투자 시간</div>
@@ -754,6 +839,7 @@ export default function App() {
   const [tab, setTab] = useState(0);
   const [settings, setSettings] = useState(() => loadS());
   const [tasks, setTasks] = useState(() => loadT());
+  const [logs, setLogs] = useState(() => loadL());
   const [showForm, setShowForm] = useState(false);
   const [editTask, setEditTask] = useState(null);
   const [pomo, setPomo] = useState(() => { const cfg = loadS().pomo || DPOMO; return { running: false, mode: "focus", remaining: cfg.focus * 60, session: 0 }; });
@@ -762,6 +848,7 @@ export default function App() {
 
   useEffect(() => saveT(tasks), [tasks]);
   useEffect(() => saveS(settings), [settings]);
+  useEffect(() => saveL(logs), [logs]);
 
   const notify = (msg, kind) => { setToast({ msg, kind: kind || "info" }); setTimeout(() => setToast(null), 4000); };
   useEffect(() => { if ("Notification" in window) Notification.requestPermission(); }, []);
@@ -796,16 +883,21 @@ export default function App() {
   const doCancel = id => { const t = tasks.find(x => x.id === id); setTasks(tasks.map(x => x.id === id ? merge(x, { cancelled: true }) : x)); notify('"' + (t ? t.title : "") + '" 삭제됨', "info"); };
   const doComplete = id => {
     const t = tasks.find(x => x.id === id);
-    const next = (t && t.repeat && t.repeat !== "없음") ? tasks.map(x => x.id === id ? merge(x, { completedCount: (x.completedCount || 0) + 1 }) : x) : tasks.map(x => x.id === id ? merge(x, { done: true }) : x);
+    const dk = dstr(getNow());
+    const next = (t && t.repeat && t.repeat !== "없음")
+      ? tasks.map(x => x.id === id ? merge(x, { doneDates: safeArr(x.doneDates).indexOf(dk) >= 0 ? x.doneDates : safeArr(x.doneDates).concat([dk]) }) : x)
+      : tasks.map(x => x.id === id ? merge(x, { done: true }) : x);
     setTasks(next); notify("완료! 🎉", "success");
   };
   const doToggle = id => {
     const t = tasks.find(x => x.id === id); if (!t) return;
     if (t.repeat && t.repeat !== "없음") {
-      const dk = dstr(getNow());
-      setTasks(tasks.map(x => { if (x.id !== id) return x; return x.lastDoneDate === dk ? merge(x, { lastDoneDate: null }) : merge(x, { lastDoneDate: dk, completedCount: (x.completedCount || 0) + 1 }); }));
+      const dk = dstr(getNow()), has = safeArr(t.doneDates).indexOf(dk) >= 0;
+      setTasks(tasks.map(x => x.id === id ? merge(x, { doneDates: has ? safeArr(x.doneDates).filter(d => d !== dk) : safeArr(x.doneDates).concat([dk]) }) : x));
     } else setTasks(tasks.map(x => x.id === id ? merge(x, { done: !x.done }) : x));
   };
+  const addLog = (date, text, time) => setLogs(ls => ls.concat([{ id: uid(), date, time: time || fmt(getNow().getHours() * 60 + getNow().getMinutes()), text, createdAt: Date.now() }]));
+  const delLog = id => setLogs(ls => ls.filter(l => l.id !== id));
   const doUrgent = ut => {
     let needed = ut.duration;
     const next = tasks.map(t => { if (t.type === "flex" && !t.cancelled && !t.done && needed > 0) { const mn = t.flexMin || Math.floor(t.duration * 0.3), saved = t.duration - mn; if (saved > 0) { needed -= saved; return merge(t, { duration: mn, compressed: true }); } } return t; });
@@ -819,7 +911,7 @@ export default function App() {
   return (
     <div style={{ fontFamily: "'Segoe UI',sans-serif", background: "#f8fafc", minHeight: "100vh", maxWidth: 900, margin: "0 auto" }}>
       <div style={{ background: "linear-gradient(135deg,#6366f1,#8b5cf6)", color: "#fff", padding: "14px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div><div style={{ fontSize: 19, fontWeight: 700 }}>🗓️ 스마트 플래너 <span style={{ fontSize: 11, fontWeight: 400, opacity: 0.7, background: "rgba(255,255,255,.2)", borderRadius: 6, padding: "2px 7px" }}>v1.1.0</span></div><div style={{ fontSize: 12, opacity: .8 }}>사명 기반 스마트 스케줄러</div></div>
+        <div><div style={{ fontSize: 19, fontWeight: 700 }}>🗓️ 스마트 플래너 <span style={{ fontSize: 11, fontWeight: 400, opacity: 0.7, background: "rgba(255,255,255,.2)", borderRadius: 6, padding: "2px 7px" }}>v1.2.0</span></div><div style={{ fontSize: 12, opacity: .8 }}>사명 기반 스마트 스케줄러</div></div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <button onClick={() => { if (window.confirm("예제 데이터로 초기화할까요?")) { setTasks(STASKS); setSettings(SSETS); } }} style={{ background: "rgba(255,255,255,.18)", border: "1px solid rgba(255,255,255,.35)", borderRadius: 8, padding: "5px 10px", color: "#fff", cursor: "pointer", fontSize: 11 }}>🔄 예제 초기화</button>
           <PomoWidget pomo={pomo} setPomo={setPomo} cfg={settings.pomo || DPOMO} />
@@ -830,7 +922,7 @@ export default function App() {
         {TABS.map((t, i) => <button key={i} onClick={() => setTab(i)} style={{ flex: 1, padding: "11px 4px", border: "none", background: "none", fontWeight: tab === i ? 700 : 400, color: tab === i ? "#6366f1" : "#64748b", borderBottom: tab === i ? "3px solid #6366f1" : "3px solid transparent", cursor: "pointer", fontSize: 13 }}>{t}</button>)}
       </div>
       <div style={{ padding: 14 }}>
-        {tab === 0 && <ScheduleTab tasks={tasks} settings={settings} onComplete={doComplete} onCancel={doCancel} onToggle={doToggle} />}
+        {tab === 0 && <ScheduleTab tasks={tasks} settings={settings} onComplete={doComplete} onCancel={doCancel} onToggle={doToggle} logs={logs} onAddLog={addLog} onDeleteLog={delLog} />}
         {tab === 1 && <TaskTab tasks={tasks} settings={settings} onAdd={() => { setEditTask(null); setShowForm(true); }} onEdit={t => { setEditTask(t); setShowForm(true); }} onComplete={doComplete} onCancel={doCancel} onUrgent={doUrgent} onToggle={doToggle} />}
         {tab === 2 && <AnalysisTab tasks={tasks} settings={settings} />}
         {tab === 3 && <SettingsTab settings={settings} onChange={setSettings} />}
