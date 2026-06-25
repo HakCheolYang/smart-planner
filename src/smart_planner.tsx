@@ -13,7 +13,7 @@ const weekDays = d => { const m = monStart(d); const a = []; for (let i = 0; i <
 const fmtS = d => (d.getMonth() + 1) + "/" + d.getDate();
 const fmtF = d => { const w = ["일","월","화","수","목","금","토"]; return d.getFullYear() + "년 " + (d.getMonth() + 1) + "월 " + d.getDate() + "일 (" + w[d.getDay()] + ")"; };
 const fmtMo = d => d.getFullYear() + "년 " + (d.getMonth() + 1) + "월";
-const dleft = s => { if (!s) return 999; return Math.ceil((new Date(s) - new Date(new Date().toDateString())) / 86400000); };
+const dleft = s => { if (!s) return 999; return Math.ceil((new Date(s + "T00:00:00") - new Date(new Date().toDateString())) / 86400000); };
 const isToday = d => dstr(d) === dstr(getNow());
 const isPast = d => d < new Date(new Date().setHours(0, 0, 0, 0));
 const safeArr = v => Array.isArray(v) ? v : [];
@@ -79,6 +79,7 @@ const saveL = l => { try { localStorage.setItem(SK_L, JSON.stringify(l)); } catc
 /* ── 로직 ─────────────────────────────────────────── */
 function checkActive(task, date) {
   if (task.type !== "check" || task.cancelled) return false;
+  if (safeArr(task.skipDates).indexOf(dstr(date)) >= 0) return false;
   const r = task.repeat || "없음", dow = WMAP[date.getDay()], dn = date.getDay();
   if (r === "없음") return true;
   if (r === "매일") return true;
@@ -92,8 +93,8 @@ function checkActive(task, date) {
 function taskActive(task, date) {
   if (task.cancelled) return false;
   if (task.type === "check" || task.type === "wish") return false;
+  if (safeArr(task.skipDates).indexOf(dstr(date)) >= 0) return false;
   if (task.type === "event") {
-    if (task.done) return false;
     if (!task.dueDate) return false;
     const d = dleft(task.dueDate);
     const urg = task.urgency || "보통";
@@ -101,7 +102,6 @@ function taskActive(task, date) {
     const tgt = d <= off ? dstr(getNow()) : dstr(addD(getNow(), Math.max(0, d - off)));
     return tgt === dstr(date);
   }
-  if (task.done && (!task.repeat || task.repeat === "없음")) return false;
   const r = task.repeat || "없음", dow = WMAP[date.getDay()], dn = date.getDay();
   if (r === "없음") { if (!task.createdAt) return true; return dstr(new Date(task.createdAt)) === dstr(date); }
   if (r === "매일") return true;
@@ -111,6 +111,8 @@ function taskActive(task, date) {
   if (r === "매월") { if (!task.createdAt) return false; return new Date(task.createdAt).getDate() === date.getDate(); }
   return false;
 }
+
+const isDoneOn = (task, dk) => (task.repeat && task.repeat !== "없음") ? safeArr(task.doneDates).indexOf(dk) >= 0 : !!task.done;
 
 function repeatActiveOn(task, date) {
   const r = task.repeat || "없음", dow = WMAP[date.getDay()], dn = date.getDay();
@@ -228,6 +230,29 @@ function Sec({ title, children }) {
 }
 function Empty({ text }) { return <div style={{ textAlign: "center", color: "#94a3b8", padding: "16px 0", fontSize: 13 }}>{text}</div>; }
 
+function ActionTimeModal({ title, onConfirm, onClose }) {
+  const nowM = getNow().getHours() * 60 + getNow().getMinutes();
+  const [sel, setSel] = useState(fmt(nowM));
+  const offsets = [-30, -15, -10, -5, 0, 5, 10, 15, 30];
+  return (
+    <Modal title={title} onClose={onClose}>
+      <div style={{ textAlign: "center", fontSize: 30, fontWeight: 700, color: "#6366f1", padding: "6px 0" }}>{sel}</div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "center" }}>
+        {offsets.map(o => { const v = fmt(Math.max(0, Math.min(1439, nowM + o))); const on = sel === v; return (
+          <button type="button" key={o} onClick={() => setSel(v)} style={{ padding: "5px 10px", border: "1.5px solid " + (on ? "#6366f1" : "#e2e8f0"), borderRadius: 20, background: on ? "#6366f1" : "#fff", color: on ? "#fff" : "#64748b", cursor: "pointer", fontSize: 12, fontWeight: on ? 700 : 500 }}>
+            {o === 0 ? "지금" : o < 0 ? (-o) + "분전" : o + "분후"}
+          </button>
+        ); })}
+      </div>
+      <label style={LS}>직접 입력<input type="time" value={sel} onChange={e => setSel(e.target.value)} style={IS} /></label>
+      <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+        <button onClick={() => onConfirm(sel)} style={{ flex: 1, background: "#6366f1", color: "#fff", border: "none", borderRadius: 8, padding: 10, cursor: "pointer", fontWeight: 600 }}>확인</button>
+        <button onClick={onClose} style={{ flex: 1, background: "#f1f5f9", color: "#64748b", border: "none", borderRadius: 8, padding: 10, cursor: "pointer" }}>취소</button>
+      </div>
+    </Modal>
+  );
+}
+
 /* ── 뽀모도로 ─────────────────────────────────────── */
 function PomoWidget({ pomo, setPomo, cfg }) {
   const ml = { focus: "🍅 집중", shortBreak: "☕ 짧은 휴식", longBreak: "🛋️ 긴 휴식" };
@@ -244,12 +269,13 @@ function PomoWidget({ pomo, setPomo, cfg }) {
 }
 
 /* ── 일간 타임라인 ────────────────────────────────── */
-function DayTimeline({ date, tasks, settings, onComplete, onCancel, onReschedule }) {
+function DayTimeline({ date, tasks, settings, onStart, onFinish, onCancel, onReschedule }) {
   const [blocks, setBlocks] = useState([]);
   const [drag, setDrag] = useState(null);
   const [resz, setResz] = useState(null);
   const [tip, setTip] = useState(null);
   const [now, setNow] = useState(getNow());
+  const [actionModal, setActionModal] = useState(null);
   const gridRef = useRef(null);
   const slots = settings.slots || DSLOTS;
   let allS = 99999, allE = 0;
@@ -257,6 +283,7 @@ function DayTimeline({ date, tasks, settings, onComplete, onCancel, onReschedule
   const PX = 2.2, totalH = (allE - allS) * PX, TW = 44;
   const isTod = isToday(date), isp = isPast(date);
   const nowM = now.getHours() * 60 + now.getMinutes();
+  const dk = dstr(date);
   useEffect(() => setBlocks(buildBlocks(tasks, settings, date)), [tasks, settings, date]);
   useEffect(() => { const id = setInterval(() => setNow(getNow()), 30000); return () => clearInterval(id); }, []);
   const tl = []; for (let m = allS; m <= allE; m += 30) tl.push(m);
@@ -298,25 +325,34 @@ function DayTimeline({ date, tasks, settings, onComplete, onCancel, onReschedule
             const top = (b.start - allS) * PX, bh = Math.max(b.dur * PX, 18), c = bc(b);
             const task = b.taskId ? getTask(b.taskId) : null;
             const goal = task && task.goalId ? getGoal(task.goalId) : null;
-            const canDrag = b.type === "focus" && !isp;
+            const done = task ? isDoneOn(task, dk) : false;
+            const started = !!(task && task.actStarts && task.actStarts[dk]);
+            const passed = (isTod && nowM > b.start + b.dur) || isp;
+            const notStarted = !!(task && b.type === "focus" && !done && !task.cancelled && !started && passed);
+            const canDrag = b.type === "focus" && !isp && !done;
             const active = (drag && drag.id === b.id) || (resz && resz.id === b.id);
             const sh = bh < 32;
-            const opacity = (task && (task.done || task.cancelled)) || isp ? 0.6 : 1;
+            const opacity = (done || (task && task.cancelled)) || isp ? 0.6 : 1;
+            const borderColor = notStarted ? "#f59e0b" : c.border;
             return (
               <div key={b.id} onMouseDown={canDrag ? ev => onMD(ev, b.id) : undefined} onMouseEnter={ev => setTip({ b, task, goal, x: ev.clientX, y: ev.clientY })} onMouseLeave={() => setTip(null)}
-                style={{ position: "absolute", top, left: 6, right: 6, height: bh, background: c.bg, border: "1.5px solid " + c.border, borderRadius: 6, padding: sh ? "2px 6px" : "4px 8px", cursor: canDrag ? (active ? "grabbing" : "grab") : "default", boxShadow: active ? "0 4px 12px rgba(0,0,0,.18)" : "0 1px 3px rgba(0,0,0,.06)", zIndex: active ? 50 : 1, boxSizing: "border-box", overflow: "hidden", opacity }}>
+                style={{ position: "absolute", top, left: 6, right: 6, height: bh, background: c.bg, border: "1.5px " + (notStarted ? "dashed" : "solid") + " " + borderColor, borderRadius: 6, padding: sh ? "2px 6px" : "4px 8px", cursor: canDrag ? (active ? "grabbing" : "grab") : "default", boxShadow: active ? "0 4px 12px rgba(0,0,0,.18)" : "0 1px 3px rgba(0,0,0,.06)", zIndex: active ? 50 : 1, boxSizing: "border-box", overflow: "hidden", opacity }}>
                 <div style={{ display: "flex", alignItems: "flex-start", gap: 4, height: "100%" }}>
                   <div style={{ flex: 1, overflow: "hidden", minWidth: 0 }}>
                     <div style={{ fontSize: sh ? 9.5 : 11, fontWeight: 700, color: c.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", lineHeight: 1.3 }}>{b.label}</div>
-                    {!sh && <div style={{ fontSize: 9, color: "#94a3b8" }}>{fmt(b.start)}–{fmt(b.start + b.dur)}{goal ? " · 🎯" + goal.title : ""}{task && task.compressed ? " · ⚡" : ""}{b.isFixedTime ? " · ⏰고정" : ""}</div>}
+                    {!sh && <div style={{ fontSize: 9, color: notStarted ? "#b45309" : "#94a3b8", fontWeight: notStarted ? 700 : 400 }}>{fmt(b.start)}–{fmt(b.start + b.dur)}{goal ? " · 🎯" + goal.title : ""}{task && task.compressed ? " · ⚡" : ""}{b.isFixedTime ? " · ⏰고정" : ""}{notStarted ? " · ⚠️미착수" : ""}</div>}
                   </div>
-                  {isTod && b.type === "focus" && task && !task.done && !task.cancelled && !sh && (
+                  {isTod && b.type === "focus" && task && !done && !task.cancelled && !sh && (
                     <div style={{ display: "flex", flexDirection: "column", gap: 2, flexShrink: 0 }}>
-                      <button onMouseDown={ev => ev.stopPropagation()} onClick={() => onComplete(b.taskId)} style={{ background: "#10b981", color: "#fff", border: "none", borderRadius: 4, width: 18, height: 18, fontSize: 9, cursor: "pointer", padding: 0 }}>✓</button>
+                      {!started ? (
+                        <button onMouseDown={ev => ev.stopPropagation()} onClick={() => setActionModal({ taskId: b.taskId, mode: "start" })} style={{ background: "#3b82f6", color: "#fff", border: "none", borderRadius: 4, width: 18, height: 18, fontSize: 9, cursor: "pointer", padding: 0 }} title="시작">▶</button>
+                      ) : (
+                        <button onMouseDown={ev => ev.stopPropagation()} onClick={() => setActionModal({ taskId: b.taskId, mode: "finish" })} style={{ background: "#10b981", color: "#fff", border: "none", borderRadius: 4, width: 18, height: 18, fontSize: 9, cursor: "pointer", padding: 0 }} title="종료">⏹</button>
+                      )}
                       <button onMouseDown={ev => ev.stopPropagation()} onClick={() => onCancel(b.taskId)} style={{ background: "#ef4444", color: "#fff", border: "none", borderRadius: 4, width: 18, height: 18, fontSize: 9, cursor: "pointer", padding: 0 }}>🗑</button>
                     </div>
                   )}
-                  {task && task.done && <span style={{ fontSize: 8, color: "#10b981", fontWeight: 700 }}>✓</span>}
+                  {done && <span style={{ fontSize: 8, color: "#10b981", fontWeight: 700, whiteSpace: "nowrap" }}>✓{task.actStarts && task.actStarts[dk] && task.actEnds && task.actEnds[dk] ? " " + task.actStarts[dk] + "~" + task.actEnds[dk] : ""}</span>}
                 </div>
                 {canDrag && <div onMouseDown={ev => onRD(ev, b.id)} style={{ position: "absolute", bottom: 0, left: 0, right: 0, height: 6, cursor: "ns-resize", background: "rgba(99,102,241,.15)", borderRadius: "0 0 5px 5px" }} />}
               </div>
@@ -330,7 +366,15 @@ function DayTimeline({ date, tasks, settings, onComplete, onCancel, onReschedule
           <div style={{ color: "#94a3b8" }}>{fmt(tip.b.start)}–{fmt(tip.b.start + tip.b.dur)} ({tip.b.dur}분)</div>
           {tip.goal && <div style={{ color: "#a5b4fc", marginTop: 2 }}>🎯 {tip.goal.title}</div>}
           {tip.task && tip.task.compressed && <div style={{ color: "#fcd34d", marginTop: 2 }}>⚡ 압축됨</div>}
+          {tip.task && tip.task.memo && <div style={{ color: "#fde68a", marginTop: 2 }}>📝 {tip.task.memo}</div>}
         </div>
+      )}
+      {actionModal && (
+        <ActionTimeModal
+          title={actionModal.mode === "start" ? "▶ 시작 시간 기록" : "⏹ 종료(완료) 시간 기록"}
+          onConfirm={t => { if (actionModal.mode === "start") onStart(actionModal.taskId, dk, t); else onFinish(actionModal.taskId, dk, t); setActionModal(null); }}
+          onClose={() => setActionModal(null)}
+        />
       )}
     </div>
   );
@@ -384,7 +428,7 @@ function WeekGrid({ wdays, tasks, settings }) {
 }
 
 /* ── 스케줄 탭 ────────────────────────────────────── */
-function ScheduleTab({ tasks, settings, onComplete, onCancel, onToggle, onReschedule, logs, onAddLog, onDeleteLog }) {
+function ScheduleTab({ tasks, settings, onStart, onFinish, onCancel, onToggle, onReschedule, logs, onAddLog, onDeleteLog }) {
   const [view, setView] = useState("day");
   const [cur, setCur] = useState(() => getNow());
   const wds = weekDays(cur);
@@ -434,7 +478,7 @@ function ScheduleTab({ tasks, settings, onComplete, onCancel, onToggle, onResche
             </div>
             <button onClick={() => setCur(d => addD(d, 1))} style={NB}>다음날 ›</button>
           </div>
-          <DayTimeline date={cur} tasks={tasks} settings={settings} onComplete={onComplete} onCancel={onCancel} onReschedule={onReschedule} />
+          <DayTimeline date={cur} tasks={tasks} settings={settings} onStart={onStart} onFinish={onFinish} onCancel={onCancel} onReschedule={onReschedule} />
           <ActivityLog date={cur} logs={logs} onAdd={onAddLog} onDelete={onDeleteLog} />
         </div>
       ) : (
@@ -508,6 +552,7 @@ function TaskCard({ task, settings, onEdit, onComplete, onCancel }) {
           </div>
           {goal && <div style={{ fontSize: 11, color: "#6366f1" }}>🎯 {goal.title}</div>}
           {doneN > 0 && <div style={{ fontSize: 11, color: "#8b5cf6" }}>누적 완료 {doneN}회{streak > 0 ? " · 🔥" + streak + "일 연속" : ""}</div>}
+          {task.memo && <div style={{ fontSize: 11, color: "#92400e", background: "#fffbeb", borderRadius: 4, padding: "2px 6px", marginTop: 3 }}>📝 {task.memo}</div>}
         </div>
         {!task.done && !task.cancelled && (
           <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
@@ -568,6 +613,7 @@ function TaskTab({ tasks, settings, onAdd, onEdit, onComplete, onCancel, onUrgen
                     {safeArr(t.doneDates).length > 0 ? " · " + safeArr(t.doneDates).length + "회 완료" : ""}
                     {streak > 0 ? " · 🔥" + streak + "일 연속" : ""}
                   </div>
+                  {t.memo && <div style={{ fontSize: 11, color: "#92400e", background: "#fffbeb", borderRadius: 4, padding: "2px 6px", marginTop: 2, display: "inline-block" }}>📝 {t.memo}</div>}
                 </div>
                 <button onClick={() => onEdit(t)} style={BS("#6366f1")}>✏️</button>
                 <button onClick={() => onCancel(t.id)} style={BS("#ef4444")}>🗑</button>
@@ -586,7 +632,7 @@ function TaskTab({ tasks, settings, onAdd, onEdit, onComplete, onCancel, onUrgen
           {wishItems.map((t, i) => (
             <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 9, background: "#eff6ff", border: "1.5px solid #93c5fd", borderRadius: 10, padding: "8px 12px", marginBottom: 6 }}>
               <span style={{ background: "#3b82f6", color: "#fff", borderRadius: "50%", width: 22, height: 22, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, flexShrink: 0 }}>{i + 1}</span>
-              <div style={{ flex: 1 }}><div style={{ fontWeight: 600, fontSize: 13 }}>{t.title}</div><div style={{ fontSize: 11, color: "#64748b" }}>{t.duration}분 · {t.category1}</div></div>
+              <div style={{ flex: 1 }}><div style={{ fontWeight: 600, fontSize: 13 }}>{t.title}</div><div style={{ fontSize: 11, color: "#64748b" }}>{t.duration}분 · {t.category1}</div>{t.memo && <div style={{ fontSize: 11, color: "#92400e" }}>📝 {t.memo}</div>}</div>
               <button onClick={() => onEdit(t)} style={BS("#6366f1")}>✏️</button>
               <button onClick={() => onComplete(t.id)} style={BS("#10b981")}>✓</button>
               <button onClick={() => onCancel(t.id)} style={BS("#ef4444")}>🗑</button>
@@ -751,20 +797,26 @@ function SettingsTab({ settings, onChange }) {
 }
 
 /* ── 태스크 폼 ────────────────────────────────────── */
-function TaskForm({ task, settings, onSave, onClose }) {
+function TaskForm({ task, settings, occurrenceDate, onSave, onClose }) {
   const cats = Object.keys(settings.cats || DCATS);
   const allSlots = settings.slots || DSLOTS;
-  const def = { title: "", type: "check", priority: "중", urgency: "보통", duration: 25, flexMin: 10, dueDate: "", allowedSlots: [], category1: cats[0] || "", category2: "", goalId: "", wishRank: 1, repeat: "없음", repeatDays: [] };
+  const def = { title: "", type: "check", priority: "중", urgency: "보통", duration: 25, flexMin: 10, dueDate: "", allowedSlots: [], category1: cats[0] || "", category2: "", goalId: "", wishRank: 1, repeat: "없음", repeatDays: [], memo: "" };
   const [f, setF] = useState(task || def);
   const set = (k, v) => setF(x => { const n = merge(x, {}); n[k] = v; return n; });
   const subCats = (settings.cats || DCATS)[f.category1] || [];
   const toggleSlot = label => { const p = safeArr(f.allowedSlots), idx = p.indexOf(label), np = p.slice(); if (idx >= 0) np.splice(idx, 1); else np.push(label); set("allowedSlots", np); };
   const toggleDay = d => { const p = safeArr(f.repeatDays), idx = p.indexOf(d), np = p.slice(); if (idx >= 0) np.splice(idx, 1); else np.push(d); set("repeatDays", np); };
+  const isOcc = !!occurrenceDate;
   const needsDur = f.type !== "check";
   const needsSched = f.type !== "check" && f.type !== "wish";
-  const needsRep = f.type === "fixed" || f.type === "flex" || f.type === "check";
+  const needsRep = (f.type === "fixed" || f.type === "flex" || f.type === "check") && !isOcc;
   return (
-    <Modal title={task ? "태스크 수정" : "태스크 추가"} onClose={onClose}>
+    <Modal title={task ? (isOcc ? "태스크 수정 (이번 회차만)" : "태스크 수정") : "태스크 추가"} onClose={onClose}>
+      {isOcc && (
+        <div style={{ background: "#ede9fe", border: "1.5px solid #c4b5fd", borderRadius: 8, padding: 10, fontSize: 12, color: "#5b21b6" }}>
+          🔄 {f.repeat}{f.repeat === "매주" && safeArr(f.repeatDays).length ? " (" + f.repeatDays.join("·") + ")" : ""} 반복 중 — {occurrenceDate} 회차만 수정되고, 원본 반복 일정은 그대로 유지됩니다.
+        </div>
+      )}
       <label style={LS}>타입
         <div style={{ position: "relative" }}>
           <select value={f.type} onChange={e => set("type", e.target.value)} style={mx(IS, { paddingLeft: 32, background: TY[f.type].bg, color: TY[f.type].color, fontWeight: 700, border: "2px solid " + TY[f.type].color })}>
@@ -798,7 +850,7 @@ function TaskForm({ task, settings, onSave, onClose }) {
           </div>
         </div>
       )}
-      {f.repeat === "매주" && (
+      {f.repeat === "매주" && !isOcc && (
         <label style={LS}>반복 요일
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 2 }}>
             {WDK.map(d => { const on = safeArr(f.repeatDays).indexOf(d) >= 0; return <button type="button" key={d} onClick={() => toggleDay(d)} style={{ width: 35, height: 35, borderRadius: "50%", border: "2px solid " + (on ? "#6366f1" : "#e2e8f0"), background: on ? "#6366f1" : "#fff", color: on ? "#fff" : "#64748b", cursor: "pointer", fontSize: 13, fontWeight: on ? 700 : 400 }}>{d}</button>; })}
@@ -807,10 +859,28 @@ function TaskForm({ task, settings, onSave, onClose }) {
       )}
       {(settings.goals || []).length > 0 && <label style={LS}>연결 목표<select value={f.goalId} onChange={e => set("goalId", e.target.value)} style={IS}><option value="">연결 안 함</option>{(settings.goals || []).map(g => <option key={g.id} value={g.id}>{g.title}</option>)}</select></label>}
       {f.type === "wish" && <label style={LS}>위시 순위<input type="number" value={f.wishRank} onChange={e => set("wishRank", +e.target.value)} min={1} style={IS} /></label>}
+      <label style={LS}>메모<textarea value={f.memo || ""} onChange={e => set("memo", e.target.value)} placeholder="나중에 기억할 내용을 적어두세요" style={mx(IS, { minHeight: 54, resize: "vertical" })} /></label>
       <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
         <button onClick={() => f.title && onSave(f)} style={{ flex: 1, background: "#6366f1", color: "#fff", border: "none", borderRadius: 8, padding: 10, cursor: "pointer", fontWeight: 600 }}>저장</button>
         <button onClick={onClose} style={{ flex: 1, background: "#f1f5f9", color: "#64748b", border: "none", borderRadius: 8, padding: 10, cursor: "pointer" }}>취소</button>
       </div>
+    </Modal>
+  );
+}
+
+function ScopeChoice({ task, onPick, onClose }) {
+  return (
+    <Modal title="🔄 반복 태스크 수정" onClose={onClose}>
+      <div style={{ fontSize: 13, color: "#64748b" }}>"{task.title}"은 반복 일정입니다. 어느 범위를 수정할까요?</div>
+      <button type="button" onClick={() => onPick("occurrence")} style={{ background: "#6366f1", color: "#fff", border: "none", borderRadius: 10, padding: 12, cursor: "pointer", fontWeight: 700, textAlign: "left" }}>
+        📌 이번 회차만 수정
+        <div style={{ fontSize: 11, fontWeight: 400, opacity: .85, marginTop: 2 }}>오늘 날짜의 내용만 바뀌고, 반복 일정 자체는 그대로 유지됩니다.</div>
+      </button>
+      <button type="button" onClick={() => onPick("series")} style={{ background: "#f8fafc", color: "#1e293b", border: "1.5px solid #e2e8f0", borderRadius: 10, padding: 12, cursor: "pointer", fontWeight: 700, textAlign: "left" }}>
+        🗂️ 전체 반복 일정 수정
+        <div style={{ fontSize: 11, fontWeight: 400, color: "#64748b", marginTop: 2 }}>반복 옵션을 포함해 원본 일정 자체를 수정합니다.</div>
+      </button>
+      <button type="button" onClick={onClose} style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", fontSize: 12, marginTop: 4 }}>취소</button>
     </Modal>
   );
 }
@@ -851,6 +921,8 @@ export default function App() {
   const [logs, setLogs] = useState(() => loadL());
   const [showForm, setShowForm] = useState(false);
   const [editTask, setEditTask] = useState(null);
+  const [editOccDate, setEditOccDate] = useState(null);
+  const [scopeTask, setScopeTask] = useState(null);
   const [pomo, setPomo] = useState(() => { const cfg = loadS().pomo || DPOMO; return { running: false, mode: "focus", remaining: cfg.focus * 60, session: 0 }; });
   const [toast, setToast] = useState(null);
   const timerRef = useRef(null);
@@ -889,6 +961,28 @@ export default function App() {
     setTasks(next); setShowForm(false); setEditTask(null);
     notify('"' + task.title + '" 저장됨', "success");
   };
+  const forkOccurrence = (form, occDate) => {
+    const orig = tasks.find(x => x.id === form.id);
+    if (!orig) { saveTask(form); return; }
+    const skip = safeArr(orig.skipDates).indexOf(occDate) >= 0 ? orig.skipDates : safeArr(orig.skipDates).concat([occDate]);
+    const forked = merge(form, {
+      id: uid(), createdAt: Date.now(), done: false, cancelled: false, compressed: false,
+      repeat: "없음", repeatDays: [], skipDates: [], doneDates: [], actStarts: {}, actEnds: {},
+      parentId: orig.id, occurrenceDate: occDate, dueDate: form.dueDate || occDate,
+    });
+    setTasks(tasks.map(x => x.id === orig.id ? merge(x, { skipDates: skip }) : x).concat([forked]));
+    setShowForm(false); setEditTask(null); setEditOccDate(null);
+    notify('"' + form.title + '" 이번 회차만 수정됨 (' + occDate + ')', "success");
+  };
+  const saveTaskForm = form => { if (editOccDate && form.id) forkOccurrence(form, editOccDate); else { saveTask(form); setEditOccDate(null); } };
+  const startEdit = task => {
+    if (task.repeat && task.repeat !== "없음") setScopeTask(task);
+    else { setEditTask(task); setEditOccDate(null); setShowForm(true); }
+  };
+  const pickScope = scope => {
+    setEditTask(scopeTask); setEditOccDate(scope === "occurrence" ? dstr(getNow()) : null);
+    setShowForm(true); setScopeTask(null);
+  };
   const doCancel = id => { const t = tasks.find(x => x.id === id); setTasks(tasks.map(x => x.id === id ? merge(x, { cancelled: true }) : x)); notify('"' + (t ? t.title : "") + '" 삭제됨', "info"); };
   const doComplete = id => {
     const t = tasks.find(x => x.id === id);
@@ -897,6 +991,20 @@ export default function App() {
       ? tasks.map(x => x.id === id ? merge(x, { doneDates: safeArr(x.doneDates).indexOf(dk) >= 0 ? x.doneDates : safeArr(x.doneDates).concat([dk]) }) : x)
       : tasks.map(x => x.id === id ? merge(x, { done: true }) : x);
     setTasks(next); notify("완료! 🎉", "success");
+  };
+  const doStart = (id, dk, time) => {
+    setTasks(tasks.map(x => x.id === id ? merge(x, { actStarts: merge(x.actStarts || {}, { [dk]: time }) }) : x));
+    notify("▶ 시작 기록: " + time, "info");
+  };
+  const doFinish = (id, dk, time) => {
+    const t = tasks.find(x => x.id === id);
+    const isRep = t && t.repeat && t.repeat !== "없음";
+    setTasks(tasks.map(x => {
+      if (x.id !== id) return x;
+      const withEnd = merge(x, { actEnds: merge(x.actEnds || {}, { [dk]: time }) });
+      return isRep ? merge(withEnd, { doneDates: safeArr(x.doneDates).indexOf(dk) >= 0 ? x.doneDates : safeArr(x.doneDates).concat([dk]) }) : merge(withEnd, { done: true });
+    }));
+    notify("완료! 🎉 (" + time + ")", "success");
   };
   const doToggle = id => {
     const t = tasks.find(x => x.id === id); if (!t) return;
@@ -924,7 +1032,7 @@ export default function App() {
   return (
     <div style={{ fontFamily: "'Segoe UI',sans-serif", background: "#f8fafc", minHeight: "100vh", maxWidth: 900, margin: "0 auto" }}>
       <div style={{ background: "linear-gradient(135deg,#6366f1,#8b5cf6)", color: "#fff", padding: "14px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div><div style={{ fontSize: 19, fontWeight: 700 }}>🗓️ 스마트 플래너 <span style={{ fontSize: 11, fontWeight: 400, opacity: 0.7, background: "rgba(255,255,255,.2)", borderRadius: 6, padding: "2px 7px" }}>v1.2.2</span></div><div style={{ fontSize: 12, opacity: .8 }}>사명 기반 스마트 스케줄러</div></div>
+        <div><div style={{ fontSize: 19, fontWeight: 700 }}>🗓️ 스마트 플래너 <span style={{ fontSize: 11, fontWeight: 400, opacity: 0.7, background: "rgba(255,255,255,.2)", borderRadius: 6, padding: "2px 7px" }}>v1.3.0</span></div><div style={{ fontSize: 12, opacity: .8 }}>사명 기반 스마트 스케줄러</div></div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <button onClick={() => { if (window.confirm("예제 데이터로 초기화할까요?")) { setTasks(STASKS); setSettings(SSETS); } }} style={{ background: "rgba(255,255,255,.18)", border: "1px solid rgba(255,255,255,.35)", borderRadius: 8, padding: "5px 10px", color: "#fff", cursor: "pointer", fontSize: 11 }}>🔄 예제 초기화</button>
           <PomoWidget pomo={pomo} setPomo={setPomo} cfg={settings.pomo || DPOMO} />
@@ -935,12 +1043,13 @@ export default function App() {
         {TABS.map((t, i) => <button key={i} onClick={() => setTab(i)} style={{ flex: 1, padding: "11px 4px", border: "none", background: "none", fontWeight: tab === i ? 700 : 400, color: tab === i ? "#6366f1" : "#64748b", borderBottom: tab === i ? "3px solid #6366f1" : "3px solid transparent", cursor: "pointer", fontSize: 13 }}>{t}</button>)}
       </div>
       <div style={{ padding: 14 }}>
-        {tab === 0 && <ScheduleTab tasks={tasks} settings={settings} onComplete={doComplete} onCancel={doCancel} onToggle={doToggle} onReschedule={doReschedule} logs={logs} onAddLog={addLog} onDeleteLog={delLog} />}
-        {tab === 1 && <TaskTab tasks={tasks} settings={settings} onAdd={() => { setEditTask(null); setShowForm(true); }} onEdit={t => { setEditTask(t); setShowForm(true); }} onComplete={doComplete} onCancel={doCancel} onUrgent={doUrgent} onToggle={doToggle} />}
+        {tab === 0 && <ScheduleTab tasks={tasks} settings={settings} onStart={doStart} onFinish={doFinish} onCancel={doCancel} onToggle={doToggle} onReschedule={doReschedule} logs={logs} onAddLog={addLog} onDeleteLog={delLog} />}
+        {tab === 1 && <TaskTab tasks={tasks} settings={settings} onAdd={() => { setEditTask(null); setEditOccDate(null); setShowForm(true); }} onEdit={startEdit} onComplete={doComplete} onCancel={doCancel} onUrgent={doUrgent} onToggle={doToggle} />}
         {tab === 2 && <AnalysisTab tasks={tasks} settings={settings} />}
         {tab === 3 && <SettingsTab settings={settings} onChange={setSettings} />}
       </div>
-      {showForm && <TaskForm task={editTask} settings={settings} onSave={saveTask} onClose={() => { setShowForm(false); setEditTask(null); }} />}
+      {showForm && <TaskForm task={editTask} settings={settings} occurrenceDate={editOccDate} onSave={saveTaskForm} onClose={() => { setShowForm(false); setEditTask(null); setEditOccDate(null); }} />}
+      {scopeTask && <ScopeChoice task={scopeTask} onPick={pickScope} onClose={() => setScopeTask(null)} />}
     </div>
   );
 }
