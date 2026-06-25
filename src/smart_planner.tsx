@@ -311,15 +311,15 @@ function DayTimeline({ date, tasks, settings, onStart, onFinish, onCancel, onRes
     const c = TY[b.taskType]; return { bg: c ? c.bg : "#f1f5f9", border: c ? c.color : "#94a3b8", text: "#1e293b" };
   };
   const onMD = (ev, id) => { if (isp) return; const br = ev.currentTarget.getBoundingClientRect(); setDrag({ id, oy: ev.clientY - br.top }); ev.preventDefault(); };
-  const onRD = (ev, id) => { setBlocks(p => p.map(b => b.id === id ? merge(b, { _od: b.dur }) : b)); setResz({ id, sy: ev.clientY }); ev.preventDefault(); ev.stopPropagation(); };
+  const onRD = (ev, id) => { setBlocks(p => p.map(b => b.id === id ? merge(b, { _od: b.dur }) : b)); setResz({ id, sy: ev.clientY, scrollY: gridRef.current ? gridRef.current.scrollTop : 0 }); ev.preventDefault(); ev.stopPropagation(); };
   const onMM = ev => {
     if ((drag || resz) && gridRef.current) {
       const r = gridRef.current.getBoundingClientRect(), edge = 36;
       if (ev.clientY - r.top < edge) gridRef.current.scrollTop -= 14;
       else if (r.bottom - ev.clientY < edge) gridRef.current.scrollTop += 14;
     }
-    if (drag && gridRef.current) { const rect = gridRef.current.getBoundingClientRect(); const ns = Math.round((ev.clientY - rect.top - drag.oy) / PX / 5) * 5 + allS; setBlocks(p => p.map(b => b.id === drag.id ? merge(b, { start: Math.max(allS, Math.min(allE - 5, ns)) }) : b)); }
-    if (resz && gridRef.current) { const dm = Math.round((ev.clientY - resz.sy) / PX / 5) * 5; setBlocks(p => p.map(b => b.id === resz.id ? merge(b, { dur: Math.max(5, (b._od || b.dur) + dm) }) : b)); }
+    if (drag && gridRef.current) { const rect = gridRef.current.getBoundingClientRect(); const ns = Math.round((ev.clientY - rect.top + gridRef.current.scrollTop - drag.oy) / PX / 5) * 5 + allS; setBlocks(p => p.map(b => b.id === drag.id ? merge(b, { start: Math.max(allS, Math.min(allE - 5, ns)) }) : b)); }
+    if (resz && gridRef.current) { const scrollDelta = gridRef.current.scrollTop - resz.scrollY; const dm = Math.round((ev.clientY - resz.sy + scrollDelta) / PX / 5) * 5; setBlocks(p => p.map(b => b.id === resz.id ? merge(b, { dur: Math.max(5, (b._od || b.dur) + dm) }) : b)); }
   };
   const onUp = () => {
     if (drag) { const b = blocks.find(x => x.id === drag.id); if (b && b.taskId) onReschedule(b.taskId, b.start, null); }
@@ -1052,7 +1052,7 @@ export default function App() {
   return (
     <div style={{ fontFamily: "'Segoe UI',sans-serif", background: "#f8fafc", minHeight: "100vh", maxWidth: 900, margin: "0 auto" }}>
       <div style={{ background: "linear-gradient(135deg,#6366f1,#8b5cf6)", color: "#fff", padding: "14px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div><div style={{ fontSize: 19, fontWeight: 700 }}>🗓️ 스마트 플래너 <span style={{ fontSize: 11, fontWeight: 400, opacity: 0.7, background: "rgba(255,255,255,.2)", borderRadius: 6, padding: "2px 7px" }}>v1.3.1</span></div><div style={{ fontSize: 12, opacity: .8 }}>사명 기반 스마트 스케줄러</div></div>
+        <div><div style={{ fontSize: 19, fontWeight: 700 }}>🗓️ 스마트 플래너 <span style={{ fontSize: 11, fontWeight: 400, opacity: 0.7, background: "rgba(255,255,255,.2)", borderRadius: 6, padding: "2px 7px" }}>v1.3.2</span></div><div style={{ fontSize: 12, opacity: .8 }}>사명 기반 스마트 스케줄러</div></div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <button onClick={() => { if (window.confirm("예제 데이터로 초기화할까요?")) { setTasks(STASKS); setSettings(SSETS); } }} style={{ background: "rgba(255,255,255,.18)", border: "1px solid rgba(255,255,255,.35)", borderRadius: 8, padding: "5px 10px", color: "#fff", cursor: "pointer", fontSize: 11 }}>🔄 예제 초기화</button>
           <PomoWidget pomo={pomo} setPomo={setPomo} cfg={settings.pomo || DPOMO} />
